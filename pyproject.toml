@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zerodrop"
+version = "0.1.0"
+description = "Email verification infrastructure for CI pipelines — OTPs and magic links auto-extracted. No Docker, no regex, no signup."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "ZeroDrop", email = "founder@zerodrop.dev" }]
+keywords = [
+    "email-verification",
+    "otp",
+    "magic-link",
+    "playwright",
+    "pytest",
+    "ci-cd",
+    "authentication-testing",
+    "email-testing",
+    "developer-tools",
+    "testing-tools",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Communications :: Email",
+]
+requires-python = ">=3.8"
+dependencies = []
+
+[project.urls]
+Homepage = "https://zerodrop.dev"
+Documentation = "https://docs.zerodrop.dev"
+Repository = "https://github.com/zerodrop-dev/zerodrop-python"
+"Bug Tracker" = "https://github.com/zerodrop-dev/zerodrop-python/issues"
