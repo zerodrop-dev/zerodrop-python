@@ -6,6 +6,7 @@ Email verification infrastructure for CI pipelines and AI agents.
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import string
@@ -16,7 +17,7 @@ from typing import Callable, Optional
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "ZeroDrop",
     "ZeroDropEmail",
@@ -29,6 +30,10 @@ __all__ = [
 BASE_URL = "https://zerodrop.dev"
 FREE_DOMAIN = "zerodrop-sandbox.online"
 POLL_INTERVAL = 2.0  # seconds
+
+# A free key from https://zerodrop.dev/keys: zd_<prefix>_<32 letters/digits>.
+# Inboxes named <prefix>-... can be read only with that key.
+_KEY_FORMAT = re.compile(r"^zd_([a-z0-9]{4})_[A-Za-z0-9]{32}$")
 
 
 # ============================================
@@ -72,8 +77,8 @@ class ZeroDropTimeoutError(Exception):
 
 
 class ZeroDropAuthError(Exception):
-    def __init__(self):
-        super().__init__("ZeroDrop: Invalid or missing API key.")
+    def __init__(self, detail: Optional[str] = None):
+        super().__init__(f"ZeroDrop: {detail or 'Invalid or missing API key.'}")
 
 
 class ZeroDropNetworkError(Exception):
@@ -151,6 +156,21 @@ def _parse_email(data: dict) -> ZeroDropEmail:
     )
 
 
+def _key_prefix(api_key: Optional[str]) -> Optional[str]:
+    """The inbox prefix a key carries: "zd_k7x2_..." -> "k7x2"."""
+    match = _KEY_FORMAT.match(api_key or "")
+    return match.group(1) if match else None
+
+
+def _auth_error(error: HTTPError) -> ZeroDropAuthError:
+    """The server explains a 401 in its JSON body; pass that on."""
+    try:
+        detail = json.loads(error.read().decode()).get("error")
+    except Exception:
+        detail = None
+    return ZeroDropAuthError(detail if isinstance(detail, str) else None)
+
+
 def _generate_inbox_name() -> str:
     adjectives = ["swift", "dark", "cold", "null", "void", "zero", "dead", "raw", "base", "core"]
     adj = random.choice(adjectives)
@@ -167,7 +187,7 @@ class ZeroDrop:
     ZeroDrop client for email verification in CI pipelines.
 
     Usage:
-        mail = ZeroDrop()
+        mail = ZeroDrop()          # reads ZERODROP_API_KEY if it's set
         inbox = mail.generate_inbox()
         email = mail.wait_for_latest(inbox, timeout=15000)
         print(email.otp)        # "123456"
@@ -179,25 +199,38 @@ class ZeroDrop:
         api_key: Optional[str] = None,
         base_url: str = BASE_URL,
     ):
-        self.api_key = api_key
+        self.api_key = api_key or os.environ.get("ZERODROP_API_KEY", "").strip() or None
+        # The inbox prefix your key carries ("k7x2"), or None without a key.
+        self.prefix = _key_prefix(self.api_key)
         self.base_url = base_url.rstrip("/")
 
-        if not api_key:
+        if not self.api_key:
             import warnings
             warnings.warn(
-                "[ZeroDrop] No API key provided. Running in public sandbox mode.\n"
-                "[ZeroDrop] Inboxes expire in 30 minutes.\n"
-                "[ZeroDrop] Free tier uses a shared domain — for production CI use Workspaces: "
-                "https://zerodrop.dev",
+                "[ZeroDrop] No API key: anyone who knows an inbox's name can read it.\n"
+                "[ZeroDrop] Free key for private inboxes: https://zerodrop.dev/keys "
+                "(set ZERODROP_API_KEY).\n"
+                "[ZeroDrop] Inboxes expire in 30 minutes. Free tier uses a shared domain — "
+                "for production CI use Workspaces: https://zerodrop.dev",
+                stacklevel=2,
+            )
+        elif not self.prefix:
+            import warnings
+            warnings.warn(
+                "[ZeroDrop] That API key isn't in the zd_xxxx_... format from "
+                "https://zerodrop.dev/keys, so generated inboxes get no prefix and stay public.",
                 stacklevel=2,
             )
 
     def generate_inbox(self) -> str:
         """
         Returns a ready-to-use email address instantly.
-        No network request needed.
+        No network request needed. With a key, the name starts
+        with your prefix: k7x2-swift-x7k29ab
         """
         name = _generate_inbox_name()
+        if self.prefix:
+            name = f"{self.prefix}-{name}"
         return f"{name}@{FREE_DOMAIN}"
 
     def fetch_latest(
@@ -222,7 +255,7 @@ class ZeroDrop:
                 data = json.loads(resp.read().decode())
         except HTTPError as e:
             if e.code == 401:
-                raise ZeroDropAuthError()
+                raise _auth_error(e)
             raise ZeroDropNetworkError(f"API returned {e.code}")
         except URLError as e:
             raise ZeroDropNetworkError(str(e.reason))

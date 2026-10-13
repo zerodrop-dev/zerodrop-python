@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "zerodrop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Email verification infrastructure for CI pipelines — OTPs and magic links auto-extracted. No Docker, no regex, no signup."
 readme = "README.md"
 license = { text = "MIT" }

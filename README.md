@@ -40,6 +40,21 @@ print(email.otp)         # "123456" — auto-extracted, no regex needed
 print(email.magic_link)  # "https://..." — auto-extracted verification link
 ```
 
+## Free API Key (Private Inboxes)
+
+Without a key, anyone who knows an inbox's name can read it. With a free key, your inboxes start with your own prefix and only your key can read them.
+
+1. Sign in with GitHub at [zerodrop.dev/keys](https://zerodrop.dev/keys) and create a key.
+2. Set it as `ZERODROP_API_KEY`. The client reads it automatically, or you can pass `api_key=`.
+
+```python
+mail = ZeroDrop()                  # reads ZERODROP_API_KEY when it's set
+inbox = mail.generate_inbox()
+# → "k7x2-swift-x7k29ab@zerodrop-sandbox.online", where k7x2 is your prefix
+```
+
+Reading a `k7x2-…` inbox without your key raises `ZeroDropAuthError` with the reason. `mail.prefix` holds your prefix if you build an address yourself.
+
 ## CI Pipeline Mode (pytest)
 
 ```python
@@ -117,11 +132,14 @@ inboxes = [mail.generate_inbox() for _ in range(50)]
 ## API
 
 ### `ZeroDrop(api_key=None, base_url=BASE_URL)`
-- `api_key` — optional. Omit for free sandbox mode.
+- `api_key` — optional. Defaults to the `ZERODROP_API_KEY` environment variable. Without a key, inboxes are public to anyone who knows the name.
 - `base_url` — override the API base URL.
 
 ### `mail.generate_inbox() -> str`
-Returns a ready-to-use email address instantly. No network request.
+Returns a ready-to-use email address instantly. No network request. With a key, the name starts with your prefix.
+
+### `mail.prefix -> Optional[str]`
+Your key's inbox prefix (`"k7x2"`), or `None` without a key.
 
 ### `mail.fetch_latest(inbox, filter_=None) -> Optional[ZeroDropEmail]`
 Returns the latest email or `None` if inbox is empty.
@@ -180,7 +198,7 @@ except ZeroDropTimeoutError:
 | Email filtering | ✓ | ✓ |
 | Email retention | 30 min | Extended |
 | Custom domains | ✗ | ✓ |
-| API key | ✗ | ✓ |
+| API key | ✓ free at [zerodrop.dev/keys](https://zerodrop.dev/keys) | ✓ |
 | Webhooks | ✗ | ✓ |
 
 Get a Workspace at [zerodrop.dev](https://zerodrop.dev)
