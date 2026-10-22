@@ -17,7 +17,7 @@ from typing import Callable, Optional
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __all__ = [
     "ZeroDrop",
     "ZeroDropEmail",
@@ -34,6 +34,13 @@ POLL_INTERVAL = 2.0  # seconds
 # A free key from https://zerodrop.dev/keys: zd_<prefix>_<32 letters/digits>.
 # Inboxes named <prefix>-... can be read only with that key.
 _KEY_FORMAT = re.compile(r"^zd_([a-z0-9]{4})_[A-Za-z0-9]{32}$")
+
+# A key goes into an HTTP header, so after trimming it may hold only visible
+# ASCII. Anything else is refused without echoing the key: the HTTP library's
+# own check would quote the whole value in its error message.
+_SENDABLE_KEY = re.compile(r"[\x21-\x7e]+")
+# Whitespace around a key goes, including no-break spaces and byte-order marks.
+_KEY_PADDING = re.compile(r"^[\s\ufeff]+|[\s\ufeff]+$")
 
 
 # ============================================
@@ -199,7 +206,16 @@ class ZeroDrop:
         api_key: Optional[str] = None,
         base_url: str = BASE_URL,
     ):
-        self.api_key = api_key or os.environ.get("ZERODROP_API_KEY", "").strip() or None
+        # Trimmed, and a blank key falls back to ZERODROP_API_KEY.
+        key = _KEY_PADDING.sub("", api_key or "") or _KEY_PADDING.sub(
+            "", os.environ.get("ZERODROP_API_KEY", "")
+        )
+        if key and not _SENDABLE_KEY.fullmatch(key):
+            raise ValueError(
+                "ZeroDrop: the API key contains a character that can't be sent in an HTTP header, "
+                "such as a line break. Copy it again from https://zerodrop.dev/keys."
+            )
+        self.api_key = key or None
         # The inbox prefix your key carries ("k7x2"), or None without a key.
         self.prefix = _key_prefix(self.api_key)
         self.base_url = base_url.rstrip("/")

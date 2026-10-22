@@ -53,7 +53,7 @@ inbox = mail.generate_inbox()
 # → "k7x2-swift-x7k29ab@zerodrop-sandbox.online", where k7x2 is your prefix
 ```
 
-Reading a `k7x2-…` inbox without your key raises `ZeroDropAuthError` with the reason. `mail.prefix` holds your prefix if you build an address yourself.
+Reading a `k7x2-…` inbox without your key raises `ZeroDropAuthError` with the reason. `mail.prefix` holds your prefix if you build an address yourself. A key holding a character that can't be sent in an HTTP header (a line break, say) makes `ZeroDrop()` raise `ValueError`; the message never includes the key.
 
 ## CI Pipeline Mode (pytest)
 
