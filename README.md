@@ -6,7 +6,7 @@
 
 Email verification infrastructure for CI pipelines and AI agents.
 
-Send a verification email. Catch it at the edge. Get `email.otp` and `email.magic_link` back — auto-extracted, no regex, no Docker, no signup.
+Send a verification email. Catch it at the edge. Get `email.otp` and `email.magic_link` back — auto-extracted, no regex, no Docker, no signup to try.
 
 ```python
 email = mail.wait_for_latest(inbox)
@@ -42,7 +42,7 @@ print(email.magic_link)  # "https://..." — auto-extracted verification link
 
 ## Free API Key (Private Inboxes)
 
-Without a key, anyone who knows an inbox's name can read it. With a free key, your inboxes start with your own prefix and only your key can read them.
+Without a key, anyone who knows an inbox's name can read it, and one sender can reach only 5 different inboxes a day. With a free key, your inboxes start with your own prefix, only your key can read them, and mail to them isn't limited.
 
 1. Sign in with GitHub at [zerodrop.dev/keys](https://zerodrop.dev/keys) and create a key.
 2. Set it as `ZERODROP_API_KEY`. The client reads it automatically, or you can pass `api_key=`.
@@ -53,11 +53,14 @@ inbox = mail.generate_inbox()
 # → "k7x2-swift-x7k29ab@zerodrop-sandbox.online", where k7x2 is your prefix
 ```
 
-Reading a `k7x2-…` inbox without your key raises `ZeroDropAuthError` with the reason. `mail.prefix` holds your prefix if you build an address yourself. A key holding a character that can't be sent in an HTTP header (a line break, say) makes `ZeroDrop()` raise `ValueError`; the message never includes the key.
+Reading a `k7x2-…` inbox without your key raises `ZeroDropAuthError` with the reason. Without a key, if ZeroDrop held an email because its sender passed the daily limit, the inbox gets a notice instead, and `fetch_latest()` and `wait_for_latest()` raise `ZeroDropHeldError` saying so (0.3.0 or later; older versions return the notice as if it were the email, or time out when a filter skips it). `mail.prefix` holds your prefix if you build an address yourself. A key holding a character that can't be sent in an HTTP header (a line break, say) makes `ZeroDrop()` raise `ValueError`; the message never includes the key.
 
 ## CI Pipeline Mode (pytest)
 
 ```python
+import os
+import re
+from playwright.sync_api import expect
 from zerodrop import ZeroDrop
 
 mail = ZeroDrop(api_key=os.environ.get("ZERODROP_API_KEY"))
@@ -74,7 +77,7 @@ def test_password_reset(page):
 
     # No regex — magic_link is auto-extracted at the edge
     page.goto(email.magic_link)
-    assert page.url == "/dashboard"
+    expect(page).to_have_url(re.compile(r".*/dashboard"))
 ```
 
 ## Email Filtering
@@ -122,12 +125,14 @@ Both fields are `None` if not detected in the email.
 
 ## Parallel CI Runs
 
-`generate_inbox()` runs locally — no network request, no throttling:
+`generate_inbox()` runs locally — no network request:
 
 ```python
 # Safe to run in parallel — generate_inbox() is local
 inboxes = [mail.generate_inbox() for _ in range(50)]
 ```
+
+Mail to that many inboxes needs a free API key: without one, one sender can reach only 5 different inboxes a day.
 
 ## API
 
@@ -142,16 +147,13 @@ Returns a ready-to-use email address instantly. No network request. With a key, 
 Your key's inbox prefix (`"k7x2"`), or `None` without a key.
 
 ### `mail.fetch_latest(inbox, filter_=None) -> Optional[ZeroDropEmail]`
-Returns the latest email or `None` if inbox is empty.
+Returns the latest email matching the filter, or `None` if none matches. Raises `ZeroDropHeldError` if nothing matches and the inbox has a notice that ZeroDrop held an email.
 
 ### `mail.wait_for_latest(inbox, timeout=10000, poll_interval=2.0, filter_=None) -> ZeroDropEmail`
-Polls until an email arrives. Raises `ZeroDropTimeoutError` on timeout.
+Polls until an email arrives. Raises `ZeroDropTimeoutError` on timeout, and `ZeroDropHeldError` at once if ZeroDrop held the email.
 - `timeout` — milliseconds to wait (default: 10000)
 - `poll_interval` — seconds between polls (default: 2.0)
 - `filter_` — optional `ZeroDropFilter` instance
-
-### `mail.on_received(inbox, webhook_url) -> dict`
-Registers a webhook. Requires API key (Workspace tier).
 
 ## Types
 
@@ -180,13 +182,24 @@ class ZeroDropFilter:
 ## Error Handling
 
 ```python
-from zerodrop import ZeroDrop, ZeroDropTimeoutError
+from zerodrop import ZeroDrop, ZeroDropTimeoutError, ZeroDropHeldError
 
 try:
     email = mail.wait_for_latest(inbox, timeout=10000)
 except ZeroDropTimeoutError:
     print("No email received — check your app is sending correctly")
+except ZeroDropHeldError as e:
+    # Without an API key, the sender passed the daily limit. The message
+    # says so; a free key from https://zerodrop.dev/keys lifts it.
+    print(e)
 ```
+
+| Error | When |
+|---|---|
+| `ZeroDropTimeoutError` | No email arrived within the timeout |
+| `ZeroDropHeldError` | ZeroDrop held the email: without an API key, its sender passed the daily limit (5 different inboxes a day) |
+| `ZeroDropAuthError` | The inbox belongs to an API key, and the request had no key or another one |
+| `ZeroDropNetworkError` | The API couldn't be reached or answered with an error |
 
 ## Free vs Workspace
 
@@ -199,7 +212,7 @@ except ZeroDropTimeoutError:
 | Email retention | 30 min | Extended |
 | Custom domains | ✗ | ✓ |
 | API key | ✓ free at [zerodrop.dev/keys](https://zerodrop.dev/keys) | ✓ |
-| Webhooks | ✗ | ✓ |
+| Daily limit per sender | 5 inboxes without a key, none with one | None |
 
 Get a Workspace at [zerodrop.dev](https://zerodrop.dev)
 

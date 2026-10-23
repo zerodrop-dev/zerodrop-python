@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "zerodrop"
-version = "0.2.1"
-description = "Email verification infrastructure for CI pipelines — OTPs and magic links auto-extracted. No Docker, no regex, no signup."
+version = "0.3.0"
+description = "Email verification infrastructure for CI pipelines — OTPs and magic links auto-extracted. No Docker, no regex, no signup to try."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "ZeroDrop", email = "founder@zerodrop.dev" }]

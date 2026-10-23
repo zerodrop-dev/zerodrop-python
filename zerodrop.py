@@ -7,17 +7,17 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import re
+import secrets
 import string
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Optional
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 __all__ = [
     "ZeroDrop",
     "ZeroDropEmail",
@@ -25,6 +25,7 @@ __all__ = [
     "ZeroDropTimeoutError",
     "ZeroDropAuthError",
     "ZeroDropNetworkError",
+    "ZeroDropHeldError",
 ]
 
 BASE_URL = "https://zerodrop.dev"
@@ -96,6 +97,23 @@ class ZeroDropNetworkError(Exception):
         )
 
 
+_HELD_DEFAULT = (
+    "ZeroDrop held the email sent to this inbox: without an API key, one sender can reach "
+    "only a few different inboxes a day. Get a free key at https://zerodrop.dev/keys and "
+    "set ZERODROP_API_KEY."
+)
+
+
+class ZeroDropHeldError(Exception):
+    """Without an API key, one sender can reach only a few different inboxes a
+    day. Past that, ZeroDrop holds the email and leaves a notice in the inbox
+    instead; fetch_latest() and wait_for_latest() then raise this, with the
+    server's reason, rather than returning None or waiting until the timeout."""
+
+    def __init__(self, reason: Optional[str] = None):
+        super().__init__(reason or _HELD_DEFAULT)
+
+
 # ============================================
 # Internal helpers
 # ============================================
@@ -146,6 +164,28 @@ def _matches_filter(email: ZeroDropEmail, filter_: Optional[ZeroDropFilter]) -> 
     return True
 
 
+def _is_notice(data: dict) -> bool:
+    """A notice that ZeroDrop held the email, rather than an email."""
+    return data.get("held") is True
+
+
+def _held_error(notice: dict) -> ZeroDropHeldError:
+    reason = notice.get("reason")
+    return ZeroDropHeldError(reason.strip() if isinstance(reason, str) else None)
+
+
+def _parse_time(value: object) -> datetime:
+    """The API's "2026-10-23T09:15:02.481Z" as a UTC datetime. Before
+    Python 3.11, datetime.fromisoformat doesn't accept the trailing "Z"."""
+    if isinstance(value, str) and value:
+        text = value[:-1] + "+00:00" if value[-1] in "Zz" else value
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc)
+
+
 def _parse_email(data: dict) -> ZeroDropEmail:
     raw = data.get("raw", "")
     return ZeroDropEmail(
@@ -155,9 +195,7 @@ def _parse_email(data: dict) -> ZeroDropEmail:
         subject=data.get("subject", ""),
         body=_extract_body(raw),
         raw_body=raw,
-        received_at=datetime.fromisoformat(
-            data.get("receivedAt", datetime.utcnow().isoformat())
-        ),
+        received_at=_parse_time(data.get("receivedAt")),
         otp=data.get("otp"),
         magic_link=data.get("magicLink"),
     )
@@ -179,9 +217,11 @@ def _auth_error(error: HTTPError) -> ZeroDropAuthError:
 
 
 def _generate_inbox_name() -> str:
+    # Without a key, an inbox's name is its only access control, so it comes
+    # from the secrets module rather than random.
     adjectives = ["swift", "dark", "cold", "null", "void", "zero", "dead", "raw", "base", "core"]
-    adj = random.choice(adjectives)
-    suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=7))
+    adj = secrets.choice(adjectives)
+    suffix = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(7))
     return f"{adj}-{suffix}"
 
 
@@ -223,8 +263,9 @@ class ZeroDrop:
         if not self.api_key:
             import warnings
             warnings.warn(
-                "[ZeroDrop] No API key: anyone who knows an inbox's name can read it.\n"
-                "[ZeroDrop] Free key for private inboxes: https://zerodrop.dev/keys "
+                "[ZeroDrop] No API key: anyone who knows an inbox's name can read it, and one "
+                "sender can reach only a few different inboxes a day.\n"
+                "[ZeroDrop] Free key for private, unlimited inboxes: https://zerodrop.dev/keys "
                 "(set ZERODROP_API_KEY).\n"
                 "[ZeroDrop] Inboxes expire in 30 minutes. Free tier uses a shared domain — "
                 "for production CI use Workspaces: https://zerodrop.dev",
@@ -257,6 +298,8 @@ class ZeroDrop:
         """
         Fetches the latest email for an inbox.
         Returns None if inbox is empty or no email matches the filter.
+        Raises ZeroDropHeldError if no email matches and the inbox has a
+        notice that ZeroDrop held an email.
         """
         inbox_name = inbox.split("@")[0].lower()
         url = f"{self.base_url}/api/inbox/{inbox_name}?source=sdk"
@@ -280,11 +323,19 @@ class ZeroDrop:
         if not emails:
             return None
 
+        # A notice of held mail is never returned as an email; if nothing
+        # matches, it explains why.
+        notice = None
         for raw_email in emails:
+            if _is_notice(raw_email):
+                notice = notice or raw_email
+                continue
             email = _parse_email(raw_email)
             if _matches_filter(email, filter_):
                 return email
 
+        if notice is not None:
+            raise _held_error(notice)
         return None
 
     def wait_for_latest(
@@ -296,7 +347,8 @@ class ZeroDrop:
     ) -> ZeroDropEmail:
         """
         Polls until an email arrives in the inbox.
-        Throws ZeroDropTimeoutError on timeout.
+        Raises ZeroDropTimeoutError on timeout, and ZeroDropHeldError at once
+        if ZeroDrop held the email.
 
         Args:
             inbox: The inbox address to poll.
@@ -315,7 +367,7 @@ class ZeroDrop:
                 email = self.fetch_latest(inbox, filter_=filter_)
                 if email:
                     return email
-            except ZeroDropAuthError:
+            except (ZeroDropAuthError, ZeroDropHeldError):
                 raise
             except ZeroDropNetworkError as e:
                 import warnings
@@ -331,27 +383,10 @@ class ZeroDrop:
         webhook_url: str,
     ) -> dict:
         """
-        Registers a webhook for a workspace inbox.
-        Requires API key (Workspace tier).
+        Deprecated: ZeroDrop has no webhooks, and the endpoint this called
+        was never built. Kept so existing code still imports; it raises at
+        once. Use wait_for_latest().
         """
-        if not self.api_key:
-            raise ZeroDropAuthError()
-
-        url = f"{self.base_url}/api/webhooks/register"
-        payload = json.dumps({"inbox": inbox, "webhookUrl": webhook_url}).encode()
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
-
-        try:
-            req = Request(url, data=payload, headers=headers, method="POST")
-            with urlopen(req, timeout=10) as resp:
-                return {"registered": resp.status == 200}
-        except HTTPError as e:
-            if e.code == 401:
-                raise ZeroDropAuthError()
-            raise ZeroDropNetworkError(f"Webhook registration failed: {e.code}")
-        except URLError as e:
-            raise ZeroDropNetworkError(str(e.reason))
+        raise RuntimeError(
+            "ZeroDrop: webhooks aren't available. Use wait_for_latest() to wait for an email."
+        )
